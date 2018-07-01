@@ -1,0 +1,5 @@
+echo "RED"
+
+echo "GREEN"
+
+echo "BLUE"
