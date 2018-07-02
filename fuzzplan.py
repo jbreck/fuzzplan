@@ -10,6 +10,7 @@ class Substitution :
         self.specific_params = specific_params
         self.fuzzplan = fuzzplan
         self.state = dict() # reserved for future use
+        self.output = ""
         self.mutate() # this sets self.output, among other things
     def mutate(self) :
         # This method calls a function whose name is self.head + "_random" within the
@@ -31,6 +32,7 @@ class Substitution :
             if p.startswith(self.head + ".") : params[p[len(self.head)+1:]] = self.fuzzplan.parameters[p]
         params.update(self.specific_params) # Bring in params from this substitution point specifically 
         params["fuzzplan"] = self.fuzzplan
+        params["lastOutput"] = self.output 
         params["state"] = self.state # Make self.state visible to the mutation function
         self.output = function(params)
         self.state = params["state"] # Allow mutation function to change self.state
