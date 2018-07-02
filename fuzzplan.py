@@ -117,11 +117,16 @@ class Fuzzplan :
                 if sline in ["##header","##body","##footer"] :
                     mode = sline
                     self.closeBlock()
-                elif sline.startswith("##intparam") or sline.startswith("##stringparam"):
+                elif (sline.startswith("##intparam") 
+                   or sline.startswith("##stringparam") 
+                   or sline.startswith("##floatparam")):
                     parts = re.split("\s*",sline,maxsplit=2)
                     if len(parts) == 2 : self.parameters[parts[1]] = ""
                     elif len(parts) == 3 : 
-                        convert = {"##intparam":int, "##stringparam":str}[parts[0].strip()]
+                        convert = {"##intparam":int, 
+                                   "##stringparam":str,
+                                   "##floatparam":float,
+                                  }[parts[0].strip()]
                         self.parameters[parts[1]] = convert(parts[2].strip())
                     else : raise Exception("Malformed ##param line")
                 elif mode == "##header" : self.header.append(line)
@@ -191,7 +196,10 @@ class Fuzzplan :
             print line.rstrip()
             matches = re.match("([A-Z0-9_]+):=(.*)", line)
             if matches :
-                outputValues[matches.group(1)]
+                outputValues[matches.group(1)] = matches.group(2)
+        if "OBJECTIVE" in outputValues :
+            # The value of this OBJECTIVE output could be used to guide the fuzzing
+            print "Fuzzplan sees that OBJECTIVE is:" + outputValues["OBJECTIVE"]
         # Delete the script file
         os.remove(scriptPath)
     def run(self) :

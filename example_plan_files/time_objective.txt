@@ -1,0 +1,13 @@
+##header
+START=$(date +%s%3N)
+
+##body
+
+DELAY=@{float min=0.001 max=1.00}
+echo "This time, the delay is $DELAY"
+sleep $DELAY ms
+
+##footer
+END=$(date +%s%3N)
+TIME=$(expr $END - $START)
+echo OBJECTIVE:=$TIME

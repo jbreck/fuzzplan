@@ -6,3 +6,4 @@ import random
 def dummy_random(params) :
     chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
     return "".join([random.choice(chars) for I in range(int(params["len"]))])
+
