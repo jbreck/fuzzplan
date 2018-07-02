@@ -210,8 +210,8 @@ class Fuzzplan :
             print "======== TRIAL %d" % iTrial
             self.mutateCommandSequence()
             self.execute()
-            iTrial += 1
             if iTrial == self.getIntParam("nTrials") : break
+            iTrial += 1
 
 def usage() :
     print "USAGE: %s <fuzzing_plan_file>"
