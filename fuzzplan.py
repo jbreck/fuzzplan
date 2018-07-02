@@ -1,35 +1,35 @@
-#!/bin/bash
+#!/usr/bin/python
 import re, sys, os, subprocess, random, shlex, tempfile, stat
 import user_substitution_types
 
 class Fuzzplan :
-    def defaultParameters(self) :
+    def setDefaultParameters(self) :
+        self.parameters = dict()
         self.parameters["nCommands"] = 20
         self.parameters["nTrials"] = -1 # loop forever
         self.parameters["numeric.min"] = 0
         self.parameters["numeric.max"] = 1000000000
         self.parameters["alpha.len"] = 20
         self.parameters["alphanumeric.len"] = 20
-    def getIntParam(self, name) : return int(self.parameters["name"])
-    def getStringParam(self, name) : return self.parameters["name"]
+    def getIntParam(self, name) : return int(self.parameters[name])
+    def getStringParam(self, name) : return self.parameters[name]
     def closeBlock(self) :
         if len(self.currentBodyBlock) > 0 :
             self.bodyBlocks.append(self.currentBodyBlock)
             self.currentBodyBlock = list()
-    def parseCommandFile(self, commandFilePath) :
-        with open(commandFilePath,"r") as commandFile :
+    def parsePlanFile(self, planFilePath) :
+        with open(planFilePath,"r") as commandFile :
             self.header = list() # this is a list of strings
             self.footer = list() # this is a list of strings
             self.bodyBlocks = list() # this is a list of lists of strings
             self.currentBodyBlock = list()
-            self.parameters = dict()
             mode = "##body"
             for line in commandFile :
                 sline = line.strip()
                 if sline in ["##header","##body","##footer"] :
                     mode = sline
                     self.closeBlock()
-                elif sline.startswith "##param" :
+                elif sline.startswith("##param"):
                     parts = re.split("\s*",sline,maxsplit=2)
                     if len(parts) == 2 : self.parameters[parts[1]] = ""
                     elif len(parts) == 3 : self.parameters[parts[1]] = parts[2].strip()
@@ -40,10 +40,9 @@ class Fuzzplan :
                     if len(sline) == 0 : self.closeBlock()
                     else: self.currentBodyBlock.append(line)
             self.closeBlock()
-            self.bodyBlocks.append(currentBodyBlock)
-    def __init__(self, commandFilePath) :
+    def __init__(self, planFilePath) :
         self.setDefaultParameters()
-        parseCommandFile(commandFilePath)
+        self.parsePlanFile(planFilePath)
     def callSubstitutionCommand(self, head, specific_params) :
         function_name_rand = head + "_random"
         if not hasattr(user_substitution_types, function_name_rand) :
@@ -65,6 +64,7 @@ class Fuzzplan :
         subPointRegex = r"@\{([^}]+)\}"
         # Look for substitution points in string
         matches = re.search(subPointRegex, string)
+        Z = 1
         while matches :
             # If the substitution point is "@{numeric min=0 max=100}", then the
             #  label is "numeric min=0 max=100"
@@ -79,12 +79,19 @@ class Fuzzplan :
                 replacement = self.callSubstitutionCommand(head, params)
             else :
                 # no parameters
+                head = label.strip()
                 params = dict() # the user supplied no parameters at this substitution point
                 replacement = self.callSubstitutionCommand(head, params)
             # Actually perform the substitution
-            string[matches.start():matches.end()] = replacement
+            #print "HI"
+            #print " ~~> <" + string[matches.start():matches.end()] + ">"
+            string = string[:matches.start()] + str(replacement) + string[matches.end():]
+            #print "YO"
+            #print string
             # Now look for another substitution point
             matches = re.search(subPointRegex, string)
+            Z += 1
+            if Z >= 5 : break
         return string
     def drawRandomSequence(self) :
         bodySequence = list()
@@ -93,7 +100,7 @@ class Fuzzplan :
         sequence = self.header + bodySequence + self.footer
         substituted = list()
         for command in sequence :
-            newCommand = self.performSubstitution(command)
+            newCommand = self.performSubstitutions(command)
             substituted.append(newCommand)
         return substituted
     def execute(self, sequence) :
@@ -105,20 +112,22 @@ class Fuzzplan :
         #https://stackoverflow.com/questions/12791997/how-do-you-do-a-simple-chmod-x-from-within-python
         os.chmod(scriptPath, os.stat(scriptPath).st_mode | stat.S_IEXEC)
         # Finally, we actually run the script:
-        stdout, stderr = subprocess.check_output([scriptPath],shell=True)
+        child = subprocess.Popen([scriptPath],stdout=subprocess.PIPE,stderr=subprocess.PIPE,shell=True)
+        stdout, stderr = child.communicate()
         outputValues = dict()
         # Scan the output printed by the script for lines of the form:
         #    ALL_CAPS_TEXT:=...anything...
         # These are output values produced by the script
-        for line in stdout :
+        for line in stdout.split("\n") :
+            print line.rstrip()
             matches = re.match("([A-Z0-9_]+):=(.*)", line)
             if matches :
                 outputValues[matches.group(1)]
         # Delete the script file
         os.remove(scriptPath)
     def run(self) :
-        print "====== Executing fuzzing plan" % iTrial
         iTrial = 1
+        print "====== Executing fuzzing plan"
         while True :
             print "======== TRIAL %d" % iTrial
             sequence = self.drawRandomSequence()
@@ -130,9 +139,11 @@ def usage() :
     print "USAGE: %s <fuzzing_plan_file>"
 
 def main() :
-    if len(sys.argv) < 1 :
+    if len(sys.argv) < 2 :
         usage()
         sys.exit(0)
-    commandFilePath = sys.argv[1]
-    fuzzplan = Fuzzplan(commandFilePath)
+    planFilePath = sys.argv[1]
+    fuzzplan = Fuzzplan(planFilePath)
     fuzzplan.run()
+
+if __name__=="__main__" : main()

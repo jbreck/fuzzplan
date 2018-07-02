@@ -1,3 +1,5 @@
+##param nCommands 5
+
 echo "RED"
 
 echo "GREEN"

@@ -1,0 +1,7 @@
+##param nCommands 5
+##param nTrials 5
+
+echo "/path/to/@{alphanumeric}/something"
+
+echo "/hello/world/@{alphanumeric}/stuff"
+
