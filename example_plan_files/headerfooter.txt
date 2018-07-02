@@ -1,0 +1,17 @@
+##footer
+
+echo "I always go last!"
+
+##header
+
+echo "I always go first!"
+
+##body
+
+##intparam nCommands 5
+
+echo "RED"
+
+echo "GREEN"
+
+echo "BLUE"

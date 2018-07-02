@@ -1,7 +1,7 @@
-##param nCommands 5
-##param nTrials 5
+##intparam nCommands 5
+##intparam nTrials 5
 
-echo "/path/to/@{alphanumeric}/something"
+echo "/path/to/@{alphanumeric len=5}/something"
 
 echo "/hello/world/@{alphanumeric}/stuff"
 

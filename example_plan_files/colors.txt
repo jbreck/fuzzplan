@@ -1,4 +1,4 @@
-##param nCommands 5
+##intparam nCommands 5
 
 echo "RED"
 
