@@ -1,17 +1,26 @@
 #!/usr/bin/python
-import re, sys, os, subprocess, random, shlex, tempfile, stat
+import re, sys, os, subprocess, random, shlex, tempfile, stat, copy
 import default_substitution_types
 import user_substitution_types
 
 class Substitution :
     """This class represents an occurrence of a substitution point such as '@{alphanumeric}'"""
-    def __init__(self, head, specific_params, fuzzplan) :
-        self.head = head
-        self.specific_params = specific_params
-        self.fuzzplan = fuzzplan
-        self.state = dict() # reserved for future use
-        self.output = ""
-        self.mutate() # this sets self.output, among other things
+    def __init__(self, head=None, specific_params=None, fuzzplan=None, orig=None) :
+        if orig is not None : # copy
+            self.head = orig.head
+            self.specific_params = copy.deepcopy(orig.specific_params)
+            self.fuzzplan = orig.fuzzplan
+            self.state = copy.deepcopy(orig.state)
+            self.output = orig.output
+        elif head is not None and specific_params is not None and fuzzplan is not None : # new
+            self.head = head
+            self.specific_params = specific_params
+            self.fuzzplan = fuzzplan
+            self.state = dict() # reserved for future use
+            self.output = ""
+            self.mutate() # this sets self.output, among other things
+        else :
+            raise Exception("Please pass head,specific_params,fuzzplan  or  orig  to Substitution")
     def mutate(self) :
         # This method calls a function whose name is self.head + "_random" within the
         #   user_substitution_types module, and, failing that, the default_substitution_types module.
@@ -42,11 +51,20 @@ class Substitution :
 
 class CommandTemplate :
     """This class represents a template for a command, such as 'curl http://localhost/thing/@{numeric}/'"""
-    def __init__(self, fuzzplan, string) :
-        self.subs = dict()
-        self.fuzzplan = fuzzplan
-        self.string = string
-        self.output = string
+    def __init__(self, fuzzplan=None, string=None, orig=None) :
+        if orig is not None : # copy
+            self.subs = dict()
+            for kSub, vSub in orig.subs.items() : self.subs[kSub] = Substitution(orig=vSub)
+            self.fuzzplan = orig.fuzzplan
+            self.string = orig.string
+            self.output = orig.output
+        elif fuzzplan is not None and string is not None : # new
+            self.subs = dict()
+            self.fuzzplan = fuzzplan
+            self.string = string
+            self.output = string
+        else :
+            raise Exception("Please pass fuzzplan,string  or  orig  to  CommandTemplate")
     def getOutput(self) : 
         self.performSubstitutions()
         return self.output
@@ -86,6 +104,86 @@ class CommandTemplate :
             # Now look for another substitution point
             match = re.search(subPointRegex, self.string)
         self.output += self.string[lastIndex:len(self.string)]
+
+class CommandSequence :
+    def __init__(self, fuzzplan=None, orig=None) :
+        if orig is not None :
+            self.fuzzplan = orig.fuzzplan
+            self.commandBlocks = list()
+            for vBlock in orig.commandBlocks :
+                commandBlock = list()
+                for vCommand in vBlock :
+                    commandBlock.append(CommandTemplate(orig=vCommand))
+                self.commandBlocks.append(commandBlock)
+            self.outputValues = copy.deepcopy(orig.outputValues)
+        elif fuzzplan is not None :
+            self.fuzzplan = fuzzplan
+            self.newCommandSequence()
+    def newCommandBlock(self) :
+        blockPlan = random.choice(self.fuzzplan.bodyBlocks)
+        newBlock = list()
+        for commandTemplate in blockPlan :
+            newBlock.append(CommandTemplate(self.fuzzplan, commandTemplate))
+        return newBlock
+    def newCommandSequence(self) :
+        bodySequence = list()
+        for i in range(self.fuzzplan.getIntParam("nCommands")) :
+            bodySequence.append(self.newCommandBlock())
+        headerBlock = list()
+        for commandTemplate in self.fuzzplan.header :
+            headerBlock.append(CommandTemplate(self.fuzzplan, commandTemplate))
+        footerBlock = list()
+        for commandTemplate in self.fuzzplan.footer :
+            footerBlock.append(CommandTemplate(self.fuzzplan, commandTemplate))
+        self.commandBlocks = [headerBlock] + bodySequence + [footerBlock]
+    def mutateCommandSequence(self) :
+        if random.random() > 0.50 :
+            commandsContainingSubstitutions = list()
+            for iBlock in range(len(self.commandBlocks)) :
+                for iCommand in range(len(self.commandBlocks[iBlock])) :
+                    if len(self.commandBlocks[iBlock][iCommand].getSubs()) > 0 :
+                        commandsContainingSubstitutions.append( (iBlock,iCommand) )
+            if len(commandsContainingSubstitutions) > 0 :
+                # Pick a command that has a substitution point
+                iBlock, iCommand = random.choice(commandsContainingSubstitutions)
+                # Mutate just that one substitution point of that one command
+                self.commandBlocks[iBlock][iCommand].mutate()
+                return
+        if len(self.commandBlocks) == 0 :
+            self.commandBlocks.append(self.newCommandBlock())
+            return
+        # Could also opt to change length, swap command positions, etc.
+        # Entirely replace the i^{th} command block
+        # (Except, don't replace block 0 (the header) or the final block (the footer)
+        i = random.choice(range(1,len(self.commandBlocks)-1))
+        self.commandBlocks[i] = self.newCommandBlock()
+    def execute(self) :
+        scriptFile = tempfile.NamedTemporaryFile(delete=False)
+        scriptPath = scriptFile.name
+        # Write our commands into the script file:
+        for block in self.commandBlocks :
+            for command in block : 
+                print >>scriptFile, command.getOutput()
+        scriptFile.close()
+        #https://stackoverflow.com/questions/12791997/how-do-you-do-a-simple-chmod-x-from-within-python
+        os.chmod(scriptPath, os.stat(scriptPath).st_mode | stat.S_IEXEC)
+        # Finally, we actually run the script:
+        child = subprocess.Popen([scriptPath],stdout=subprocess.PIPE,stderr=subprocess.PIPE,shell=True)
+        stdout, stderr = child.communicate()
+        self.outputValues = dict()
+        # Scan the output printed by the script for lines of the form:
+        #    ALL_CAPS_TEXT:=...anything...
+        # These are output values produced by the script
+        for line in stdout.split("\n") :
+            print line.rstrip()
+            matches = re.match("([A-Z0-9_]+):=(.*)", line)
+            if matches :
+                self.outputValues[matches.group(1)] = matches.group(2)
+        #if "OBJECTIVE" in self.outputValues :
+        #    # The value of this OBJECTIVE output could be used to guide the fuzzing
+        #    print "Fuzzplan sees that OBJECTIVE is:" + self.outputValues["OBJECTIVE"]
+        # Delete the script file
+        os.remove(scriptPath)
 
 class Fuzzplan :
     """This class represents a plan for how to fuzz the input to some application"""
@@ -137,81 +235,17 @@ class Fuzzplan :
                     if len(sline) == 0 : self.closeBlock()
                     else: self.currentBodyBlock.append(line)
             self.closeBlock()
-    def newCommandBlock(self) :
-        fuzzplan = self
-        blockPlan = random.choice(self.bodyBlocks)
-        newBlock = list()
-        for commandTemplate in blockPlan :
-            newBlock.append(CommandTemplate(fuzzplan, commandTemplate))
-        return newBlock
-    def newCommandSequence(self) :
-        fuzzplan = self
-        bodySequence = list()
-        for i in range(self.getIntParam("nCommands")) :
-            bodySequence.append(self.newCommandBlock())
-        headerBlock = list()
-        for commandTemplate in self.header :
-            headerBlock.append(CommandTemplate(fuzzplan, commandTemplate))
-        footerBlock = list()
-        for commandTemplate in self.footer :
-            footerBlock.append(CommandTemplate(fuzzplan, commandTemplate))
-        self.commandBlocks = [headerBlock] + bodySequence + [footerBlock]
-    def mutateCommandSequence(self) :
-        if random.random() > 0.50 :
-            commandsContainingSubstitutions = list()
-            for iBlock in range(len(self.commandBlocks)) :
-                for iCommand in range(len(self.commandBlocks[iBlock])) :
-                    if len(self.commandBlocks[iBlock][iCommand].getSubs()) > 0 :
-                        commandsContainingSubstitutions.append( (iBlock,iCommand) )
-            if len(commandsContainingSubstitutions) > 0 :
-                # Pick a command that has a substitution point
-                iBlock, iCommand = random.choice(commandsContainingSubstitutions)
-                # Mutate just that one substitution point of that one command
-                self.commandBlocks[iBlock][iCommand].mutate()
-                return
-        if len(self.commandBlocks) == 0 :
-            self.commandBlocks.append(self.newCommandBlock())
-            return
-        # Could also opt to change length, swap command positions, etc.
-        # Entirely replace the i^{th} command block
-        # (Except, don't replace block 0 (the header) or the final block (the footer)
-        i = random.choice(range(1,len(self.commandBlocks)-1))
-        self.commandBlocks[i] = self.newCommandBlock()
-    def execute(self) :
-        scriptFile = tempfile.NamedTemporaryFile(delete=False)
-        scriptPath = scriptFile.name
-        # Write our commands into the script file:
-        for block in self.commandBlocks :
-            for command in block : 
-                print >>scriptFile, command.getOutput()
-        scriptFile.close()
-        #https://stackoverflow.com/questions/12791997/how-do-you-do-a-simple-chmod-x-from-within-python
-        os.chmod(scriptPath, os.stat(scriptPath).st_mode | stat.S_IEXEC)
-        # Finally, we actually run the script:
-        child = subprocess.Popen([scriptPath],stdout=subprocess.PIPE,stderr=subprocess.PIPE,shell=True)
-        stdout, stderr = child.communicate()
-        outputValues = dict()
-        # Scan the output printed by the script for lines of the form:
-        #    ALL_CAPS_TEXT:=...anything...
-        # These are output values produced by the script
-        for line in stdout.split("\n") :
-            print line.rstrip()
-            matches = re.match("([A-Z0-9_]+):=(.*)", line)
-            if matches :
-                outputValues[matches.group(1)] = matches.group(2)
-        if "OBJECTIVE" in outputValues :
-            # The value of this OBJECTIVE output could be used to guide the fuzzing
-            print "Fuzzplan sees that OBJECTIVE is:" + outputValues["OBJECTIVE"]
-        # Delete the script file
-        os.remove(scriptPath)
     def run(self) :
-        self.newCommandSequence()
+        sequence = CommandSequence(self)
         iTrial = 1
         print "====== Executing fuzzing plan"
         while True :
             print "======== TRIAL %d" % iTrial
-            self.mutateCommandSequence()
-            self.execute()
+            sequence.mutateCommandSequence()
+            sequence.execute()
+            #
+            # Note: to copy a command sequence, just do:  newSequence = CommandSequence(orig=oldSequence)
+            #
             if iTrial == self.getIntParam("nTrials") : break
             iTrial += 1
 
