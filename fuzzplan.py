@@ -118,6 +118,7 @@ class CommandSequence :
             self.outputValues = copy.deepcopy(orig.outputValues)
         elif fuzzplan is not None :
             self.fuzzplan = fuzzplan
+            self.outputValues = dict()
             self.newCommandSequence()
     def newCommandBlock(self) :
         blockPlan = random.choice(self.fuzzplan.bodyBlocks)
@@ -176,14 +177,13 @@ class CommandSequence :
         # These are output values produced by the script
         for line in stdout.split("\n") :
             print line.rstrip()
-            matches = re.match("([A-Z0-9_]+):=(.*)", line)
+            matches = re.match("([A-Z0-9_]+):=(.*)", line.rstrip())
             if matches :
                 self.outputValues[matches.group(1)] = matches.group(2)
-        #if "OBJECTIVE" in self.outputValues :
-        #    # The value of this OBJECTIVE output could be used to guide the fuzzing
-        #    print "Fuzzplan sees that OBJECTIVE is:" + self.outputValues["OBJECTIVE"]
-        # Delete the script file
         os.remove(scriptPath)
+    def getOutputValue(self, key) :
+        if key not in self.outputValues : return None
+        return self.outputValues[key]
 
 class Fuzzplan :
     """This class represents a plan for how to fuzz the input to some application"""
@@ -199,6 +199,8 @@ class Fuzzplan :
         self.parameters["numeric.max"] = 1000000000
         self.parameters["alpha.len"] = 20
         self.parameters["alphanumeric.len"] = 20
+        self.parameters["mode"] = "random"
+        self.parameters["nMutants"] = 5
     def getIntParam(self, name) : return int(self.parameters[name])
     def getStringParam(self, name) : return self.parameters[name]
     def closeBlock(self) :
@@ -241,16 +243,31 @@ class Fuzzplan :
         print "====== Executing fuzzing plan"
         while True :
             print "======== TRIAL %d" % iTrial
-            sequence.mutateCommandSequence()
-            sequence.execute()
-            #
-            # Note: to copy a command sequence, just do:  newSequence = CommandSequence(orig=oldSequence)
-            #
+            if self.getStringParam("mode") == "random" :
+                sequence.mutateCommandSequence()
+                sequence.execute()
+            elif self.getStringParam("mode") == "guided" :
+                bestMutant = sequence
+                bestObjective = sequence.getOutputValue("OBJECTIVE")
+                for iMutant in range(self.getIntParam("nMutants")) :
+                    mutant = CommandSequence(orig=sequence) # copy our sequence
+                    mutant.mutateCommandSequence()
+                    mutant.execute()
+                    objective = mutant.getOutputValue("OBJECTIVE")
+                    try :
+                        if bestObjective is None or float(objective.strip()) > float(bestObjective.strip()) :
+                            bestMutant = mutant
+                            bestObjective = objective
+                    except : pass # in case a weird objective value was returned
+                sequence = bestMutant
+            else :
+                raise Exception("Unrecognized mode: " + self.getStringParam("mode"))
+            # Could add an annealing mode here...
+
             if iTrial == self.getIntParam("nTrials") : break
             iTrial += 1
 
-def usage() :
-    print "USAGE: %s <fuzzing_plan_file>"
+def usage() : print "USAGE: %s <fuzzing_plan_file>"
 
 def main() :
     if len(sys.argv) < 2 :

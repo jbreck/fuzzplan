@@ -1,13 +1,14 @@
+##stringparam mode guided
 ##header
-START=$(date +%s%3N)
+START=$(date +%s%4N)
 
 ##body
 
-DELAY=@{float min=0.001 max=1.00}
+DELAY=@{float min=0.001 max=0.010}
 echo "This time, the delay is $DELAY"
-sleep $DELAY ms
+sleep ${DELAY}s
 
 ##footer
-END=$(date +%s%3N)
+END=$(date +%s%4N)
 TIME=$(expr $END - $START)
 echo OBJECTIVE:=$TIME
