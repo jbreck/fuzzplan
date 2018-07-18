@@ -3,6 +3,8 @@ import re, sys, os, subprocess, random, shlex, tempfile, stat, copy
 import default_substitution_types
 import user_substitution_types
 
+subPointRegex = r"@\{([^}]+)\}"
+
 class Substitution :
     """This class represents an occurrence of a substitution point such as '@{alphanumeric}'"""
     def __init__(self, head=None, specific_params=None, fuzzplan=None, orig=None) :
@@ -49,6 +51,28 @@ class Substitution :
     def setOutput(self, output) : self.output = output
     def setState(self, state) : self.state = state
 
+def newSubstitutionFromMatch(match, fuzzplan) :
+    # If the substitution point is "@{numeric min=0 max=100}", then the
+    #  label is "numeric min=0 max=100"
+    #  head is "numeric"
+    #  kvp is "min=0 max=100"
+    label = match.group(1)
+    if " " in label :
+        head = label[:label.index(" ")]
+        kvp = label[label.index(" ")+1:]                
+        # https://stackoverflow.com/questions/4764547/creating-dictionary-from-space-separated-key-value-string-in-python
+        params = dict(token.split('=') for token in shlex.split(kvp))
+        return Substitution(head, params, fuzzplan)
+    else :
+        # no parameters
+        head = label.strip()
+        params = dict() # the user supplied no parameters at this substitution point
+        return Substitution(head, params, fuzzplan)
+
+def newSubstitutionFromString(s,fuzzplan) :
+    match = re.match(subPointRegex,s)
+    return newSubstitutionFromMatch(match, fuzzplan)
+
 class CommandTemplate :
     """This class represents a template for a command, such as 'curl http://localhost/thing/@{numeric}/'"""
     def __init__(self, fuzzplan=None, string=None, orig=None) :
@@ -75,28 +99,12 @@ class CommandTemplate :
         sub.mutate()
     def performSubstitutions(self) :
         # This regular expression matches things like @{alphanumeric} or @{numeric}
-        subPointRegex = r"@\{([^}]+)\}"
         lastIndex = 0
         self.output = ""
         # Look for substitution points in self.string
         for iSub, match in enumerate(re.finditer(subPointRegex, self.string)) :
             if iSub not in self.subs :
-                # If the substitution point is "@{numeric min=0 max=100}", then the
-                #  label is "numeric min=0 max=100"
-                #  head is "numeric"
-                #  kvp is "min=0 max=100"
-                label = match.group(1)
-                if " " in label :
-                    head = label[:label.index(" ")]
-                    kvp = label[label.index(" ")+1:]                
-                    # https://stackoverflow.com/questions/4764547/creating-dictionary-from-space-separated-key-value-string-in-python
-                    params = dict(token.split('=') for token in shlex.split(kvp))
-                    self.subs[iSub] = Substitution(head, params, self.fuzzplan)
-                else :
-                    # no parameters
-                    head = label.strip()
-                    params = dict() # the user supplied no parameters at this substitution point
-                    self.subs[iSub] = Substitution(head, params, self.fuzzplan)
+                self.subs[iSub] = newSubstitutionFromMatch(match, self.fuzzplan)
             replacement = self.subs[iSub].getOutput()
             # Add a chunk of literal string, followed by the replacement
             self.output += self.string[lastIndex:match.start()] + str(replacement)
@@ -138,7 +146,7 @@ class CommandSequence :
             footerBlock.append(CommandTemplate(self.fuzzplan, commandTemplate))
         self.commandBlocks = [headerBlock] + bodySequence + [footerBlock]
     def mutateCommandSequence(self) :
-        if random.random() > 0.50 :
+        if random.random() < self.fuzzplan.getFloatParam("fuzzProbMutateSubstitution") :
             commandsContainingSubstitutions = list()
             for iBlock in range(len(self.commandBlocks)) :
                 for iCommand in range(len(self.commandBlocks[iBlock])) :
@@ -201,12 +209,24 @@ class Fuzzplan :
         self.parameters["alphanumeric.len"] = 20
         self.parameters["mode"] = "random"
         self.parameters["nMutants"] = 5
+        self.parameters["fuzzProbMutateSubstitution"] = 0.5
+        self.parameters["expr.binaryChars"] = "+-*/"
+        self.parameters["expr.leaves"] = "@{numeric}" # separate with ;;
+        self.parameters["expr.newProbLeaf"] = 0.6
+        self.parameters["expr.left"] = "( "
+        self.parameters["expr.right"] = " )"
+        self.parameters["expr.mutProbLeaf"] = 0.2
+        self.parameters["expr.mutProbTree"] = 0.1
+        self.parameters["expr.childWeight"] = 1.5
+    def getFloatParam(self, name) : return float(self.parameters[name])
     def getIntParam(self, name) : return int(self.parameters[name])
     def getStringParam(self, name) : return self.parameters[name]
     def closeBlock(self) :
         if len(self.currentBodyBlock) > 0 :
             self.bodyBlocks.append(self.currentBodyBlock)
             self.currentBodyBlock = list()
+    def makeSubstitutionFromString(self, s) :
+        return newSubstitutionFromString(s, self)
     def parsePlanFile(self, planFilePath) :
         with open(planFilePath,"r") as commandFile :
             self.header = list() # this is a list of strings
